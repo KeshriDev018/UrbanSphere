@@ -9,13 +9,14 @@ const societySchema = new mongoose.Schema(
     pincode: String,
 
     numberOfFlats: Number,
+    blocks: [String],
 
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 export default mongoose.model("Society", societySchema);

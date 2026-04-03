@@ -1,6 +1,7 @@
 import User from "../models/user.model.js";
 import Flat from "../models/flat.model.js";
 import mongoose from "mongoose";
+import Society from "../models/society.model.js"
 import {
   getCache,
   setCache,
@@ -10,21 +11,61 @@ import {
 
 export const createFlat = async (req, res) => {
   try {
-    const { block, flatNumber, floor } = req.body;
+    const { block, flatNumber, floor, type } = req.body;
 
-    if (!block || !flatNumber || !floor) {
-      return res.status(400).json({ message: "All fields are required" });
+    
+    if (!block || !flatNumber || floor === undefined || !type) {
+      return res.status(400).json({
+        message: "Block, flatNumber, floor and type are required",
+      });
     }
 
+   
+    if (floor < 0) {
+      return res.status(400).json({
+        message: "Floor must be a positive number",
+      });
+    }
+
+    
+    const society = await Society.findById(req.user.societyId);
+    if (!society) {
+      return res.status(404).json({ message: "Society not found" });
+    }
+
+    // ✅ 4. Block validation
+    if (!society.blocks.includes(block)) {
+      return res.status(400).json({
+        message: `Invalid block. Available blocks: ${society.blocks.join(", ")}`,
+      });
+    }
+
+    // ✅ 5. Duplicate flat check
+    const existing = await Flat.findOne({
+      block,
+      flatNumber,
+      societyId: req.user.societyId,
+    });
+
+    if (existing) {
+      return res.status(400).json({
+        message: "Flat already exists in this block",
+      });
+    }
+
+    // ✅ 6. Create flat
     const flat = await Flat.create({
       block,
       flatNumber,
       floor,
-      societyId: req.user.societyId, // admin’s society
+      type, // 🔥 important (2BHK, 3BHK)
+      societyId: req.user.societyId,
     });
-    // Invalidate cache for this society's flats
+
+    // ✅ 7. Cache invalidation
     await deleteCachePattern(`flats:${req.user.societyId}*`);
     console.log("🗑️ Cache invalidated for flat creation");
+
     return res.status(201).json({
       message: "Flat created successfully",
       flat,

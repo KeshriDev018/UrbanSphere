@@ -31,6 +31,7 @@ const societyRegistrationSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
+    blocks: [String],
 
     documents: [String], // cloudinary URLs
 
@@ -51,7 +52,7 @@ const societyRegistrationSchema = new mongoose.Schema(
       default: null,
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 export default mongoose.model("SocietyRegistration", societyRegistrationSchema);
