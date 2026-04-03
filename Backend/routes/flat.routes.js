@@ -4,11 +4,13 @@ import { verifyRole } from "../middlewares/verifyRole.middleware.js";
 
 import {
   createFlat,
+  bulkCreateFlats,
   getAllFlats,
   getFlatById,
   assignResidentToFlat,
   removeResidentFromFlat,
   updateFlat,
+  deleteFlat
 } from "../controllers/flat.controller.js";
 
 const router = Router();
@@ -21,6 +23,12 @@ router.post(
   verifyJWT,
   verifyRole("admin","superadmin"),
   createFlat
+);
+router.post(
+  "/createbulk",
+  verifyJWT,
+  verifyRole("admin","superadmin"),
+  bulkCreateFlats
 );
 
 // Get all flats in society
@@ -56,6 +64,14 @@ router.put(
   verifyJWT,
   verifyRole("admin", "superadmin"),
   updateFlat
+);
+
+// Get specific flat details
+router.delete(
+  "/:flatId",
+  verifyJWT,
+  verifyRole("admin", "superadmin"),
+  deleteFlat
 );
 
 export default router;

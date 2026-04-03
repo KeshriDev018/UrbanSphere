@@ -1,7 +1,7 @@
 import User from "../models/user.model.js";
 import Flat from "../models/flat.model.js";
 import mongoose from "mongoose";
-import Society from "../models/society.model.js"
+import Society from "../models/society.model.js";
 import {
   getCache,
   setCache,
@@ -11,74 +11,196 @@ import {
 
 export const createFlat = async (req, res) => {
   try {
-    const { block, flatNumber, floor, type } = req.body;
+    let { block, floor, unit, type } = req.body;
 
-    
-    if (!block || !flatNumber || floor === undefined || !type) {
+    if (block) block = block.toUpperCase().trim();
+
+    if (!block || floor === undefined || !unit || !type) {
       return res.status(400).json({
-        message: "Block, flatNumber, floor and type are required",
+        message: "Block, floor, unit and type are required",
       });
     }
 
-   
-    if (floor < 0) {
+    if (typeof floor !== "number" || floor < 0) {
       return res.status(400).json({
         message: "Floor must be a positive number",
       });
     }
 
-    
+    if (typeof unit !== "number" || unit <= 0) {
+      return res.status(400).json({
+        message: "Unit must be a positive number",
+      });
+    }
+
+    const allowedTypes = ["1BHK", "2BHK", "3BHK"];
+    if (!allowedTypes.includes(type)) {
+      return res.status(400).json({
+        message: `Invalid type. Allowed: ${allowedTypes.join(", ")}`,
+      });
+    }
+
     const society = await Society.findById(req.user.societyId);
     if (!society) {
       return res.status(404).json({ message: "Society not found" });
     }
 
-    // ✅ 4. Block validation
     if (!society.blocks.includes(block)) {
       return res.status(400).json({
         message: `Invalid block. Available blocks: ${society.blocks.join(", ")}`,
       });
     }
 
-    // ✅ 5. Duplicate flat check
-    const existing = await Flat.findOne({
-      block,
-      flatNumber,
-      societyId: req.user.societyId,
-    });
+    const flatNumber = `${block}-${floor}-${unit.toString().padStart(2, "0")}`;
 
-    if (existing) {
-      return res.status(400).json({
-        message: "Flat already exists in this block",
-      });
-    }
-
-    // ✅ 6. Create flat
     const flat = await Flat.create({
       block,
       flatNumber,
       floor,
-      type, // 🔥 important (2BHK, 3BHK)
+      type,
       societyId: req.user.societyId,
     });
 
-    // ✅ 7. Cache invalidation
+    // ✅ Cache invalidation
     await deleteCachePattern(`flats:${req.user.societyId}*`);
-    console.log("🗑️ Cache invalidated for flat creation");
 
     return res.status(201).json({
       message: "Flat created successfully",
       flat,
     });
   } catch (err) {
+    if (err.code === 11000) {
+      return res.status(400).json({
+        message: "Flat already exists in this block",
+      });
+    }
+
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+export const bulkCreateFlats = async (req, res) => {
+  try {
+    let { block, floors, flatsPerFloor, type } = req.body;
+
+    // ✅ Normalize
+    if (block) block = block.toUpperCase().trim();
+
+    // ✅ Validation
+    if (!block || !floors || !flatsPerFloor || !type) {
+      return res.status(400).json({
+        message: "block, floors, flatsPerFloor and type are required",
+      });
+    }
+
+    if (floors <= 0 || flatsPerFloor <= 0) {
+      return res.status(400).json({
+        message: "floors and flatsPerFloor must be greater than 0",
+      });
+    }
+
+    const allowedTypes = ["1BHK", "2BHK", "3BHK"];
+    if (!allowedTypes.includes(type)) {
+      return res.status(400).json({
+        message: `Invalid type. Allowed: ${allowedTypes.join(", ")}`,
+      });
+    }
+
+    // ✅ Society check
+    const societyId = req.user.societyId;
+    const society = await Society.findById(societyId);
+    if (!society) {
+      return res.status(404).json({ message: "Society not found" });
+    }
+
+    // ✅ Block validation
+    if (!society.blocks.includes(block)) {
+      return res.status(400).json({
+        message: `Invalid block. Available blocks: ${society.blocks.join(", ")}`,
+      });
+    }
+
+    const flats = [];
+
+    // 🔥 Process each floor separately
+    for (let floor = 1; floor <= floors; floor++) {
+      // ✅ Get existing flats for this floor
+      const existingFlats = await Flat.find({
+        societyId,
+        block,
+        floor,
+      }).select("flatNumber");
+
+      // ✅ Extract existing units
+      const existingUnits = existingFlats.map((flat) => {
+        const parts = flat.flatNumber.split("-");
+        return parseInt(parts[2]);
+      });
+
+      // ✅ Find max unit
+      const maxUnit = existingUnits.length ? Math.max(...existingUnits) : 0;
+
+      // ✅ Find missing units (gaps)
+      const missingUnits = [];
+      for (let i = 1; i <= maxUnit; i++) {
+        if (!existingUnits.includes(i)) {
+          missingUnits.push(i);
+        }
+      }
+
+      let unitsToCreate = [];
+
+      // 🔥 Step 1: fill gaps first
+      unitsToCreate.push(...missingUnits);
+
+      // 🔥 Step 2: continue numbering
+      let nextUnit = maxUnit + 1;
+      while (unitsToCreate.length < flatsPerFloor) {
+        unitsToCreate.push(nextUnit++);
+      }
+
+      // 🔥 Step 3: generate flats
+      unitsToCreate.forEach((unit) => {
+        const flatNumber = `${block}-${floor}-${unit
+          .toString()
+          .padStart(2, "0")}`;
+
+        flats.push({
+          block,
+          floor,
+          flatNumber,
+          type,
+          societyId,
+        });
+      });
+    }
+
+    // ✅ Insert (skip duplicates safely)
+    await Flat.insertMany(flats, { ordered: false });
+
+    // ✅ Cache invalidation
+    await deleteCachePattern(`flats:${societyId}*`);
+
+    return res.status(201).json({
+      message: "Bulk flats created with gap filling",
+      totalAttempted: flats.length,
+    });
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(207).json({
+        message: "Some flats already existed, rest created",
+      });
+    }
+
     return res.status(500).json({ message: err.message });
   }
 };
 
 export const getAllFlats = async (req, res) => {
   try {
+    const { status, type } = req.query;
     // Try to get from cache first
-    const cacheKey = `flats:${req.user.societyId}`;
+    const cacheKey = `flats:${req.user.societyId}${status ? `:${status}` : ""}${type ? `:${type}` : ""}`;
     const cached = await getCache(cacheKey);
     if (cached) {
       console.log("✅ Cache HIT for getAllFlats");
@@ -90,7 +212,11 @@ export const getAllFlats = async (req, res) => {
 
     const societyObjectId = new mongoose.Types.ObjectId(req.user.societyId);
 
-    const flats = await Flat.find({ societyId: societyObjectId })
+    const filter = { societyId: societyObjectId };
+    if (status) filter.status = status;
+    if (type) filter.type = type;
+
+    const flats = await Flat.find(filter)
       .populate("residentIds", "name email phone")
       .sort({ block: 1, flatNumber: 1 });
 
@@ -160,6 +286,7 @@ export const assignResidentToFlat = async (req, res) => {
 
     // Add user to flat
     flat.residentIds.push(userId);
+    flat.status = "OCCUPIED"; // Update status as resident is assigned
     await flat.save();
 
     // Update user flatId
@@ -195,6 +322,12 @@ export const removeResidentFromFlat = async (req, res) => {
     flat.residentIds = flat.residentIds.filter(
       (id) => id.toString() !== userId,
     );
+
+    // Update status to VACANT if no residents are left
+    if (flat.residentIds.length === 0) {
+      flat.status = "VACANT";
+    }
+
     await flat.save();
 
     // Remove flat from user profile
@@ -215,15 +348,62 @@ export const removeResidentFromFlat = async (req, res) => {
   }
 };
 
+export const deleteFlat = async (req, res) => {
+  try {
+    const { flatId } = req.params;
+
+    // ✅ Find flat
+    const flat = await Flat.findById(flatId);
+    if (!flat) {
+      return res.status(404).json({ message: "Flat not found" });
+    }
+
+    // ✅ Remove flat reference from users
+    if (flat.residentIds.length > 0) {
+      await User.updateMany(
+        { _id: { $in: flat.residentIds } },
+        { $set: { flatId: null } },
+      );
+    }
+
+    // ✅ Delete flat
+    await Flat.findByIdAndDelete(flatId);
+
+    // ✅ Cache invalidation
+    await deleteCache(`flat:${flatId}`);
+    await deleteCachePattern(`flats:${flat.societyId}*`);
+
+    return res.status(200).json({
+      message: "Flat deleted successfully",
+    });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+};
+
 export const updateFlat = async (req, res) => {
   try {
     const { flatId } = req.params;
-    const { block, flatNumber, floor } = req.body;
+    const { block, flatNumber, floor, type, status } = req.body;
+
+    const allowedTypes = ["1BHK", "2BHK", "3BHK"];
+    if (type && !allowedTypes.includes(type)) {
+      return res.status(400).json({
+        message: `Invalid type. Allowed: ${allowedTypes.join(", ")}`,
+      });
+    }
+
+    const allowedStatuses = ["VACANT", "OCCUPIED"];
+    if (status && !allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        message: `Invalid status. Allowed: ${allowedStatuses.join(", ")}`,
+      });
+    }
 
     const updatedFlat = await Flat.findByIdAndUpdate(
       flatId,
-      { block, flatNumber, floor },
-      { new: true },
+      { block, flatNumber, floor, type, status },
+      { new: true, runValidators: true },
     );
 
     if (!updatedFlat)
