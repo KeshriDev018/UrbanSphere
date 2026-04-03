@@ -1,7 +1,12 @@
-
 import Package from "../models/package.model.js";
 import Flat from "../models/flat.model.js";
-import uploadBufferToCloudinary from "../utils/cloudinaryUpload.js";
+import uploadBufferToCloudinary from "../utils/cloudinary.js";
+import {
+  getCache,
+  setCache,
+  deleteCache,
+  deleteCachePattern,
+} from "../utils/cache.js";
 
 export const createPackage = async (req, res) => {
   try {
@@ -21,7 +26,7 @@ export const createPackage = async (req, res) => {
     if (req.file) {
       const uploaded = await uploadBufferToCloudinary(
         req.file.buffer,
-        "packages"
+        "packages",
       );
       packagePhotoUrl = uploaded.secure_url;
     }
@@ -35,6 +40,12 @@ export const createPackage = async (req, res) => {
       societyId: req.user.societyId,
     });
 
+    // Invalidate cache
+    await deleteCache(`pending:packages:${req.user.societyId}`);
+    await deleteCachePattern(`packages:${req.user.societyId}`);
+    await deleteCachePattern(`flat:${flatId}:packages`);
+    console.log(`🗑️ Cache invalidated for package creation`);
+
     return res.status(201).json({
       message: "Package added successfully",
       package: pkg,
@@ -46,10 +57,26 @@ export const createPackage = async (req, res) => {
 
 export const getPendingPackages = async (req, res) => {
   try {
+    const cacheKey = `pending:packages:${req.user.societyId}`;
+
+    // Check cache
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log(`✅ Cache hit for getPendingPackages`);
+      return res.status(200).json({
+        message: "Pending packages fetched",
+        packages: cached,
+      });
+    }
+
     const packages = await Package.find({
       societyId: req.user.societyId,
       status: "Pending",
     }).populate("flatId", "flatNumber block");
+
+    // Store in cache (15 min TTL)
+    await setCache(cacheKey, packages, 900);
+    console.log(`💾 Pending packages cached`);
 
     return res.status(200).json({
       message: "Pending packages fetched",
@@ -80,6 +107,12 @@ export const markAsPickedUp = async (req, res) => {
 
     await pkg.save();
 
+    // Invalidate cache
+    await deleteCache(`pending:packages:${pkg.societyId}`);
+    await deleteCachePattern(`packages:${pkg.societyId}`);
+    await deleteCachePattern(`flat:${pkg.flatId}:packages`);
+    console.log(`🗑️ Cache invalidated for package pickup`);
+
     return res.status(200).json({
       message: "Package marked as picked up",
       package: pkg,
@@ -91,9 +124,25 @@ export const markAsPickedUp = async (req, res) => {
 
 export const getMyPackages = async (req, res) => {
   try {
+    const cacheKey = `flat:${req.user.flatId}:packages`;
+
+    // Check cache
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log(`✅ Cache hit for getMyPackages`);
+      return res.status(200).json({
+        message: "Your packages",
+        packages: cached,
+      });
+    }
+
     const packages = await Package.find({
       flatId: req.user.flatId,
     }).sort({ arrivalTime: -1 });
+
+    // Store in cache (15 min TTL)
+    await setCache(cacheKey, packages, 900);
+    console.log(`💾 My packages cached`);
 
     return res.status(200).json({
       message: "Your packages",
@@ -106,12 +155,28 @@ export const getMyPackages = async (req, res) => {
 
 export const getAllPackages = async (req, res) => {
   try {
+    const cacheKey = `packages:${req.user.societyId}`;
+
+    // Check cache
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log(`✅ Cache hit for getAllPackages`);
+      return res.status(200).json({
+        message: "All packages fetched",
+        packages: cached,
+      });
+    }
+
     const packages = await Package.find({
       societyId: req.user.societyId,
     })
       .populate("flatId", "flatNumber block")
       .populate("createdByGuard", "name email")
       .sort({ arrivalTime: -1 });
+
+    // Store in cache (30 min TTL)
+    await setCache(cacheKey, packages, 1800);
+    console.log(`💾 All packages cached`);
 
     return res.status(200).json({
       message: "All packages fetched",
@@ -131,6 +196,12 @@ export const deletePackage = async (req, res) => {
     if (!pkg) {
       return res.status(404).json({ message: "Package not found" });
     }
+
+    // Invalidate cache
+    await deleteCache(`pending:packages:${pkg.societyId}`);
+    await deleteCachePattern(`packages:${pkg.societyId}`);
+    await deleteCachePattern(`flat:${pkg.flatId}:packages`);
+    console.log(`🗑️ Cache invalidated for package deletion`);
 
     return res.status(200).json({ message: "Package deleted" });
   } catch (error) {

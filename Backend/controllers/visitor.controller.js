@@ -1,6 +1,12 @@
 import Visitor from "../models/visitor.model.js";
 import Flat from "../models/flat.model.js";
-import uploadBufferToCloudinary from "../utils/cloudinaryUpload.js";
+import uploadBufferToCloudinary from "../utils/cloudinary.js";
+import {
+  getCache,
+  setCache,
+  deleteCache,
+  deleteCachePattern,
+} from "../utils/cache.js";
 
 export const createVisitor = async (req, res) => {
   try {
@@ -19,7 +25,7 @@ export const createVisitor = async (req, res) => {
     if (req.file) {
       const upload = await uploadBufferToCloudinary(
         req.file.buffer,
-        "visitors"
+        "visitors",
       );
       photoUrl = upload.secure_url;
     }
@@ -34,6 +40,12 @@ export const createVisitor = async (req, res) => {
       photoUrl,
       societyId: req.user.societyId,
     });
+
+    // Invalidate cache
+    await deleteCache(`pending:visitors:${flatId}`);
+    await deleteCachePattern(`visitors:${req.user.societyId}`);
+    await deleteCachePattern(`flat:${flatId}:visitors`);
+    console.log(`🗑️ Cache invalidated for visitor creation`);
 
     return res.status(201).json({
       message: "Visitor entry created",
@@ -65,6 +77,12 @@ export const approveVisitor = async (req, res) => {
 
     await visitor.save();
 
+    // Invalidate cache
+    await deleteCache(`pending:visitors:${visitor.flatId}`);
+    await deleteCachePattern(`visitors:${visitor.societyId}`);
+    await deleteCachePattern(`flat:${visitor.flatId}:visitors`);
+    console.log(`🗑️ Cache invalidated for visitor approval`);
+
     return res.status(200).json({
       message: "Visitor approved successfully",
       visitor,
@@ -95,6 +113,12 @@ export const rejectVisitor = async (req, res) => {
 
     await visitor.save();
 
+    // Invalidate cache
+    await deleteCache(`pending:visitors:${visitor.flatId}`);
+    await deleteCachePattern(`visitors:${visitor.societyId}`);
+    await deleteCachePattern(`flat:${visitor.flatId}:visitors`);
+    console.log(`🗑️ Cache invalidated for visitor rejection`);
+
     return res.status(200).json({
       message: "Visitor rejected",
       visitor,
@@ -124,6 +148,11 @@ export const exitVisitor = async (req, res) => {
 
     await visitor.save();
 
+    // Invalidate cache
+    await deleteCachePattern(`visitors:${visitor.societyId}`);
+    await deleteCachePattern(`flat:${visitor.flatId}:visitors`);
+    console.log(`🗑️ Cache invalidated for visitor exit`);
+
     return res.status(200).json({
       message: "Visitor exit recorded",
       visitor,
@@ -135,10 +164,26 @@ export const exitVisitor = async (req, res) => {
 
 export const getPendingVisitors = async (req, res) => {
   try {
+    const cacheKey = `pending:visitors:${req.user.flatId}`;
+
+    // Check cache
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log(`✅ Cache hit for getPendingVisitors`);
+      return res.status(200).json({
+        message: "Pending visitors fetched",
+        visitors: cached,
+      });
+    }
+
     const visitors = await Visitor.find({
       flatId: req.user.flatId,
       status: "Pending",
     }).sort({ checkInTime: -1 });
+
+    // Store in cache (10 min TTL)
+    await setCache(cacheKey, visitors, 600);
+    console.log(`💾 Pending visitors cached`);
 
     return res.status(200).json({
       message: "Pending visitors fetched",
@@ -151,9 +196,25 @@ export const getPendingVisitors = async (req, res) => {
 
 export const getMyVisitors = async (req, res) => {
   try {
+    const cacheKey = `flat:${req.user.flatId}:visitors`;
+
+    // Check cache
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log(`✅ Cache hit for getMyVisitors`);
+      return res.status(200).json({
+        message: "Your visitor history",
+        visitors: cached,
+      });
+    }
+
     const visitors = await Visitor.find({
       flatId: req.user.flatId,
     }).sort({ checkInTime: -1 });
+
+    // Store in cache (20 min TTL)
+    await setCache(cacheKey, visitors, 1200);
+    console.log(`💾 My visitors cached`);
 
     return res.status(200).json({
       message: "Your visitor history",
@@ -166,12 +227,28 @@ export const getMyVisitors = async (req, res) => {
 
 export const getAllVisitors = async (req, res) => {
   try {
+    const cacheKey = `visitors:${req.user.societyId}`;
+
+    // Check cache
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log(`✅ Cache hit for getAllVisitors`);
+      return res.status(200).json({
+        message: "All visitors fetched",
+        visitors: cached,
+      });
+    }
+
     const visitors = await Visitor.find({
       societyId: req.user.societyId,
     })
       .populate("flatId", "flatNumber block")
       .populate("createdByGuard", "name")
       .sort({ checkInTime: -1 });
+
+    // Store in cache (20 min TTL)
+    await setCache(cacheKey, visitors, 1200);
+    console.log(`💾 All visitors cached`);
 
     return res.status(200).json({
       message: "All visitors fetched",
@@ -192,9 +269,14 @@ export const deleteVisitor = async (req, res) => {
       return res.status(404).json({ message: "Visitor not found" });
     }
 
+    // Invalidate cache
+    await deleteCachePattern(`visitors:${visitor.societyId}`);
+    await deleteCachePattern(`flat:${visitor.flatId}:visitors`);
+    await deleteCache(`pending:visitors:${visitor.flatId}`);
+    console.log(`🗑️ Cache invalidated for visitor deletion`);
+
     return res.status(200).json({ message: "Visitor deleted" });
   } catch (err) {
     return res.status(500).json({ message: err.message });
   }
 };
-

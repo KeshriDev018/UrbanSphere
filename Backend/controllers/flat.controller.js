@@ -1,7 +1,12 @@
 import User from "../models/user.model.js";
 import Flat from "../models/flat.model.js";
-
-
+import mongoose from "mongoose";
+import {
+  getCache,
+  setCache,
+  deleteCache,
+  deleteCachePattern,
+} from "../utils/cache.js";
 
 export const createFlat = async (req, res) => {
   try {
@@ -17,7 +22,9 @@ export const createFlat = async (req, res) => {
       floor,
       societyId: req.user.societyId, // admin’s society
     });
-
+    // Invalidate cache for this society's flats
+    await deleteCachePattern(`flats:${req.user.societyId}*`);
+    console.log("🗑️ Cache invalidated for flat creation");
     return res.status(201).json({
       message: "Flat created successfully",
       flat,
@@ -27,12 +34,28 @@ export const createFlat = async (req, res) => {
   }
 };
 
-
 export const getAllFlats = async (req, res) => {
   try {
-    const flats = await Flat.find({ societyId: req.user.societyId })
+    // Try to get from cache first
+    const cacheKey = `flats:${req.user.societyId}`;
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log("✅ Cache HIT for getAllFlats");
+      return res.status(200).json({
+        message: "Flats fetched successfully",
+        flats: cached,
+      });
+    }
+
+    const societyObjectId = new mongoose.Types.ObjectId(req.user.societyId);
+
+    const flats = await Flat.find({ societyId: societyObjectId })
       .populate("residentIds", "name email phone")
       .sort({ block: 1, flatNumber: 1 });
+
+    // Store in cache for 60 minutes
+    await setCache(cacheKey, flats, 3600);
+    console.log("💾 Cached getAllFlats data");
 
     return res.status(200).json({
       message: "Flats fetched successfully",
@@ -43,17 +66,31 @@ export const getAllFlats = async (req, res) => {
   }
 };
 
-
 export const getFlatById = async (req, res) => {
   try {
     const { flatId } = req.params;
 
+    // Try to get from cache first
+    const cacheKey = `flat:${flatId}`;
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log("✅ Cache HIT for getFlatById");
+      return res.status(200).json({
+        message: "Flat details fetched",
+        flat: cached,
+      });
+    }
+
     const flat = await Flat.findById(flatId).populate(
       "residentIds",
-      "name email phone role"
+      "name email phone role",
     );
 
     if (!flat) return res.status(404).json({ message: "Flat not found" });
+
+    // Store in cache for 60 minutes
+    await setCache(cacheKey, flat, 3600);
+    console.log("💾 Cached getFlatById data");
 
     return res.status(200).json({
       message: "Flat details fetched",
@@ -88,6 +125,11 @@ export const assignResidentToFlat = async (req, res) => {
     user.flatId = flatId;
     await user.save();
 
+    // Invalidate cache for this flat and all flats in the society
+    await deleteCache(`flat:${flatId}`);
+    await deleteCachePattern(`flats:${req.user.societyId}*`);
+    console.log("🗑️ Cache invalidated for flat assignment");
+
     return res.status(200).json({
       message: "Flat assigned successfully",
       flat,
@@ -110,13 +152,18 @@ export const removeResidentFromFlat = async (req, res) => {
 
     // Remove user from flat list
     flat.residentIds = flat.residentIds.filter(
-      (id) => id.toString() !== userId
+      (id) => id.toString() !== userId,
     );
     await flat.save();
 
     // Remove flat from user profile
     user.flatId = null;
     await user.save();
+
+    // Invalidate cache for this flat and all flats in the society
+    await deleteCache(`flat:${flatId}`);
+    await deleteCachePattern(`flats:${req.user.societyId}*`);
+    console.log("🗑️ Cache invalidated for flat removal");
 
     return res.status(200).json({
       message: "Resident removed from flat",
@@ -135,11 +182,16 @@ export const updateFlat = async (req, res) => {
     const updatedFlat = await Flat.findByIdAndUpdate(
       flatId,
       { block, flatNumber, floor },
-      { new: true }
+      { new: true },
     );
 
     if (!updatedFlat)
       return res.status(404).json({ message: "Flat not found" });
+
+    // Invalidate cache for this flat and all flats in the society
+    await deleteCache(`flat:${flatId}`);
+    await deleteCachePattern(`flats:*`);
+    console.log("🗑️ Cache invalidated for flat update");
 
     return res.status(200).json({
       message: "Flat updated successfully",
@@ -149,7 +201,3 @@ export const updateFlat = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
-
-
-
-

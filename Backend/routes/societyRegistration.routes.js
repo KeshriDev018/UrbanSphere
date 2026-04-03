@@ -6,6 +6,7 @@ import  upload  from "../middlewares/multer.middleware.js";
 import {
   requestSocietyRegistration,
   approveSociety,
+  getAllSocieties,
 } from "../controllers/societyRegistration.controller.js";
 
 
@@ -25,5 +26,7 @@ router.put(
   verifyRole("developer"), // developer role only
   approveSociety
 );
+
+router.get("/getall",getAllSocieties)
 
 export default router;

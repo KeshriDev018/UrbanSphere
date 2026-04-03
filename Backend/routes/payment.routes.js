@@ -8,6 +8,7 @@ import {
   refundPayment,
   verifyPayment,
 } from "../controllers/payment.controller.js";
+import {verifyRole} from "../middlewares/verifyRole.middleware.js"
 
 const router = Router();
 

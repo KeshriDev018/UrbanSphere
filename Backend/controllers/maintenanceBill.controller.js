@@ -1,12 +1,11 @@
-import User from "../models/user.model.js";
-
-import jwt from "jsonwebtoken";
-
-import uploadBufferToCloudinary from "../utils/cloudinary.js";
-import Society from "../models/society.model.js";
-import bcrypt from "bcrypt";
 import Flat from "../models/flat.model.js";
-import Staff from "../models/staff.model.js";
+import MaintenanceBill from "../models/maintenanceBill.model.js";
+import {
+  getCache,
+  setCache,
+  deleteCache,
+  deleteCachePattern,
+} from "../utils/cache.js";
 
 export const createBill = async (req, res) => {
   try {
@@ -26,6 +25,10 @@ export const createBill = async (req, res) => {
       societyId: req.user.societyId,
     });
 
+    // Invalidate cache for bills
+    await deleteCachePattern(`bills:*`);
+    console.log("🗑️ Cache invalidated for bill creation");
+
     return res.status(201).json({
       message: "Bill created successfully",
       bill,
@@ -34,7 +37,6 @@ export const createBill = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
-
 
 export const createBulkBills = async (req, res) => {
   try {
@@ -63,6 +65,10 @@ export const createBulkBills = async (req, res) => {
       bills.push(bill);
     }
 
+    // Invalidate cache for bills
+    await deleteCachePattern(`bills:*`);
+    console.log("🗑️ Cache invalidated for bulk bill creation");
+
     return res.status(201).json({
       message: "Bills generated for all flats",
       totalBills: bills.length,
@@ -75,12 +81,29 @@ export const createBulkBills = async (req, res) => {
 
 export const getAllBills = async (req, res) => {
   try {
+    const cacheKey = `bills:${req.user.societyId}`;
+
+    // Check cache first
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log("✅ Cache hit for getAllBills");
+      return res.status(200).json({
+        message: "All bills fetched",
+        bills: cached,
+        cached: true,
+      });
+    }
+
     const bills = await MaintenanceBill.find({
       societyId: req.user.societyId,
     })
       .populate("flatId", "flatNumber block")
       .populate("paymentIds")
       .sort({ createdAt: -1 });
+
+    // Store in cache for 1 hour
+    await setCache(cacheKey, bills, 3600);
+    console.log("💾 Bill data cached");
 
     return res.status(200).json({
       message: "All bills fetched",
@@ -94,10 +117,26 @@ export const getAllBills = async (req, res) => {
 export const getFlatBills = async (req, res) => {
   try {
     const { flatId } = req.params;
+    const cacheKey = `flat:${flatId}:bills`;
+
+    // Check cache first
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log("✅ Cache hit for getFlatBills");
+      return res.status(200).json({
+        message: "Bills fetched",
+        bills: cached,
+        cached: true,
+      });
+    }
 
     const bills = await MaintenanceBill.find({ flatId })
       .populate("paymentIds")
       .sort({ createdAt: -1 });
+
+    // Store in cache for 1 hour
+    await setCache(cacheKey, bills, 3600);
+    console.log("💾 Flat bills cached");
 
     return res.status(200).json({
       message: "Bills fetched",
@@ -115,11 +154,16 @@ export const updateBill = async (req, res) => {
     const updatedBill = await MaintenanceBill.findByIdAndUpdate(
       billId,
       req.body,
-      { new: true }
+      { new: true },
     );
 
     if (!updatedBill)
       return res.status(404).json({ message: "Bill not found" });
+
+    // Invalidate cache
+    await deleteCachePattern(`bills:*`);
+    await deleteCachePattern(`*:bills`);
+    console.log("🗑️ Cache invalidated for bill update");
 
     return res.status(200).json({
       message: "Bill updated",
@@ -144,10 +188,15 @@ export const updateBillStatus = async (req, res) => {
     const updated = await MaintenanceBill.findByIdAndUpdate(
       billId,
       { status },
-      { new: true }
+      { new: true },
     );
 
     if (!updated) return res.status(404).json({ message: "Bill not found" });
+
+    // Invalidate cache
+    await deleteCachePattern(`bills:*`);
+    await deleteCachePattern(`*:bills`);
+    console.log("🗑️ Cache invalidated for bill status update");
 
     return res.status(200).json({
       message: "Status updated",
@@ -158,7 +207,6 @@ export const updateBillStatus = async (req, res) => {
   }
 };
 
-
 export const addPaymentToBill = async (req, res) => {
   try {
     const { billId } = req.params;
@@ -167,7 +215,7 @@ export const addPaymentToBill = async (req, res) => {
     const updated = await MaintenanceBill.findByIdAndUpdate(
       billId,
       { $push: { paymentIds: paymentId } },
-      { new: true }
+      { new: true },
     );
 
     if (!updated) return res.status(404).json({ message: "Bill not found" });
@@ -188,6 +236,11 @@ export const deleteBill = async (req, res) => {
     const deleted = await MaintenanceBill.findByIdAndDelete(billId);
 
     if (!deleted) return res.status(404).json({ message: "Bill not found" });
+
+    // Invalidate cache
+    await deleteCachePattern(`bills:*`);
+    await deleteCachePattern(`*:bills`);
+    console.log("🗑️ Cache invalidated for bill deletion");
 
     return res.status(200).json({
       message: "Bill deleted successfully",

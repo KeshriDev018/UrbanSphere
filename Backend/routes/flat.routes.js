@@ -19,7 +19,7 @@ const router = Router();
 router.post(
   "/create",
   verifyJWT,
-  verifyRole("admin", "superadmin"),
+  verifyRole("admin","superadmin"),
   createFlat
 );
 

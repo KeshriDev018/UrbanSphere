@@ -13,7 +13,6 @@ import {
   getAllResidents,
   getPendingResidents,
   approveResident,
-  assignFlat,
   changeUserRole,
   getUserById,
   changePassword,
@@ -64,12 +63,6 @@ router.put(
   approveResident
 );
 
-router.put(
-  "/residents/assign-flat/:userId",
-  verifyJWT,
-  verifyRole("admin", "superadmin"),
-  assignFlat
-);
 
 /* CREATE STAFF/ADMIN (ONLY ADMIN & SUPERADMIN) */
 router.post(

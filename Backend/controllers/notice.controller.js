@@ -7,6 +7,13 @@ import Society from "../models/society.model.js";
 import bcrypt from "bcrypt";
 import Flat from "../models/flat.model.js";
 import Staff from "../models/staff.model.js";
+import Notice from "../models/notice.model.js";
+import {
+  getCache,
+  setCache,
+  deleteCache,
+  deleteCachePattern,
+} from "../utils/cache.js";
 
 export const createNotice = async (req, res) => {
   try {
@@ -43,6 +50,10 @@ export const createNotice = async (req, res) => {
       societyId: req.user.societyId,
     });
 
+    // Invalidate cache for this society's notices
+    await deleteCachePattern(`notices:${req.user.societyId}*`);
+    console.log("🗑️ Cache invalidated for notice creation");
+
     return res.status(201).json({
       message: "Notice created successfully",
       notice,
@@ -52,10 +63,20 @@ export const createNotice = async (req, res) => {
   }
 };
 
-
 export const getMyNotices = async (req, res) => {
   try {
     const role = req.user.role;
+
+    // Try to get from cache first
+    const cacheKey = `notices:${req.user.societyId}:${role}`;
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log("✅ Cache HIT for getMyNotices");
+      return res.status(200).json({
+        message: "Notices fetched successfully",
+        notices: cached,
+      });
+    }
 
     let audienceFilter = ["All"];
 
@@ -70,6 +91,10 @@ export const getMyNotices = async (req, res) => {
         { validTill: { $gte: new Date() } }, // only future or infinite
       ],
     }).sort({ isImportant: -1, createdAt: -1 });
+
+    // Store in cache for 15 minutes (notices change frequently)
+    await setCache(cacheKey, notices, 900);
+    console.log("💾 Cached getMyNotices data");
 
     return res.status(200).json({
       message: "Notices fetched successfully",
@@ -92,6 +117,11 @@ export const updateNotice = async (req, res) => {
       return res.status(404).json({ message: "Notice not found" });
     }
 
+    // Invalidate cache for all notices
+    await deleteCache(`notice:${noticeId}`);
+    await deleteCachePattern(`notices:*`);
+    console.log("🗑️ Cache invalidated for notice update");
+
     return res.status(200).json({
       message: "Notice updated successfully",
       notice: updatedNotice,
@@ -109,6 +139,11 @@ export const deleteNotice = async (req, res) => {
 
     if (!deleted) return res.status(404).json({ message: "Notice not found" });
 
+    // Invalidate cache for all notices
+    await deleteCache(`notice:${noticeId}`);
+    await deleteCachePattern(`notices:*`);
+    console.log("🗑️ Cache invalidated for notice deletion");
+
     return res.status(200).json({
       message: "Notice deleted successfully",
     });
@@ -121,14 +156,29 @@ export const getNoticeById = async (req, res) => {
   try {
     const { noticeId } = req.params;
 
+    // Try to get from cache first
+    const cacheKey = `notice:${noticeId}`;
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log("✅ Cache HIT for getNoticeById");
+      return res.status(200).json({
+        message: "Notice details fetched",
+        notice: cached,
+      });
+    }
+
     const notice = await Notice.findById(noticeId).populate(
       "createdBy",
-      "name email role"
+      "name email role",
     );
 
     if (!notice) {
       return res.status(404).json({ message: "Notice not found" });
     }
+
+    // Store in cache for 15 minutes
+    await setCache(cacheKey, notice, 900);
+    console.log("💾 Cached getNoticeById data");
 
     return res.status(200).json({
       message: "Notice details fetched",
@@ -139,13 +189,27 @@ export const getNoticeById = async (req, res) => {
   }
 };
 
-
 //staff and residences
 export const getAllNotices = async (req, res) => {
   try {
+    // Try to get from cache first
+    const cacheKey = `notices:${req.user.societyId}:all`;
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log("✅ Cache HIT for getAllNotices");
+      return res.status(200).json({
+        message: "All notices fetched",
+        notices: cached,
+      });
+    }
+
     const notices = await Notice.find({ societyId: req.user.societyId })
       .populate("createdBy", "name email role")
       .sort({ createdAt: -1 });
+
+    // Store in cache for 15 minutes
+    await setCache(cacheKey, notices, 900);
+    console.log("💾 Cached getAllNotices data");
 
     return res.status(200).json({
       message: "All notices fetched",

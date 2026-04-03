@@ -1,11 +1,13 @@
-import MaintenanceBill from "../models/maintenanceBill.model";
-import { razorpay } from "../src/config/razorpay.config";
+import MaintenanceBill from "../models/maintenanceBill.model.js";
+import { razorpay } from "../src/config/razorpay.config.js";
 import crypto from "crypto";
 import Payment from "../models/payment.model.js";
-
-
-
-
+import {
+  getCache,
+  setCache,
+  deleteCache,
+  deleteCachePattern,
+} from "../utils/cache.js";
 
 export const createOrder = async (req, res) => {
   try {
@@ -35,8 +37,6 @@ export const createOrder = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
-
-
 
 export const verifyPayment = async (req, res) => {
   try {
@@ -83,6 +83,13 @@ export const verifyPayment = async (req, res) => {
     bill.status = "Paid";
     await bill.save();
 
+    // Invalidate cache
+    await deleteCachePattern(`payments:*`);
+    await deleteCachePattern(`bills:*`);
+    await deleteCachePattern(`*:bills`);
+    await deleteCachePattern(`*:payments`);
+    console.log("🗑️ Cache invalidated for payment verification");
+
     return res.status(200).json({
       message: "Payment successful",
       payment,
@@ -94,12 +101,29 @@ export const verifyPayment = async (req, res) => {
 
 export const getAllPayments = async (req, res) => {
   try {
+    const cacheKey = `payments:${req.user.societyId}`;
+
+    // Check cache first
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log("✅ Cache hit for getAllPayments");
+      return res.status(200).json({
+        message: "All payments fetched",
+        payments: cached,
+        cached: true,
+      });
+    }
+
     const payments = await Payment.find({
       societyId: req.user.societyId,
     })
       .populate("flatId", "flatNumber block")
       .populate("billId", "month amount")
       .sort({ paidAt: -1 });
+
+    // Store in cache for 30 minutes
+    await setCache(cacheKey, payments, 1800);
+    console.log("💾 Payments data cached");
 
     return res.status(200).json({
       message: "All payments fetched",
@@ -110,21 +134,34 @@ export const getAllPayments = async (req, res) => {
   }
 };
 
-
 export const getPaymentsByFlat = async (req, res) => {
   try {
     const { flatId } = req.params;
+    const cacheKey = `flat:${flatId}:payments`;
+
+    // Check cache first
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log("✅ Cache hit for getPaymentsByFlat");
+      return res.status(200).json({
+        payments: cached,
+        cached: true,
+      });
+    }
 
     const payments = await Payment.find({ flatId })
       .populate("billId", "month amount")
       .sort({ paidAt: -1 });
+
+    // Store in cache for 30 minutes
+    await setCache(cacheKey, payments, 1800);
+    console.log("💾 Flat payments cached");
 
     return res.status(200).json({ payments });
   } catch (err) {
     return res.status(500).json({ message: err.message });
   }
 };
-
 
 export const refundPayment = async (req, res) => {
   try {
@@ -140,6 +177,11 @@ export const refundPayment = async (req, res) => {
     payment.status = "Refunded";
     await payment.save();
 
+    // Invalidate cache
+    await deleteCachePattern(`payments:*`);
+    await deleteCachePattern(`*:payments`);
+    console.log("🗑️ Cache invalidated for payment refund");
+
     return res.status(200).json({
       message: "Payment refunded",
       refund,
@@ -148,7 +190,6 @@ export const refundPayment = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
-
 
 export const razorpayWebhook = async (req, res) => {
   try {
@@ -170,7 +211,7 @@ export const razorpayWebhook = async (req, res) => {
 
       await Payment.findOneAndUpdate(
         { providerPaymentId: payment.id },
-        { status: "Success", paidAt: new Date() }
+        { status: "Success", paidAt: new Date() },
       );
     }
 
@@ -179,4 +220,3 @@ export const razorpayWebhook = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
-

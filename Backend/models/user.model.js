@@ -92,7 +92,9 @@ userSchema.methods.generateAccessToken = function () {
   return jwt.sign(
     {
       _id: this.id,
-      role:this.role
+      role:this.role,
+      societyId:this.societyId,
+      flatId:this.flatId
     },
     process.env.ACCESS_TOKEN_SECRET,
     {

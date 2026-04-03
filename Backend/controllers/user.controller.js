@@ -7,6 +7,7 @@ import Society from "../models/society.model.js";
 import bcrypt from "bcrypt";
 import Flat from "../models/flat.model.js";
 import Staff from "../models/staff.model.js";
+import { getCache, setCache, deleteCache } from "../utils/cache.js";
 
 export const registerUser = async (req, res) => {
   try {
@@ -171,7 +172,20 @@ export const logoutUser = async (req, res) => {
 
 export const getCurrentUser = async (req, res) => {
   try {
+    const cacheKey = `user:${req.user._id}`;
+
+    // Check cache
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log(`✅ Cache hit for getCurrentUser`);
+      return res.status(200).json({ user: cached });
+    }
+
     const user = await User.findById(req.user._id).select("-password");
+
+    // Store in cache (10 min TTL)
+    await setCache(cacheKey, user, 600);
+    console.log(`💾 User data cached`);
 
     return res.status(200).json({ user });
   } catch (err) {
@@ -207,8 +221,12 @@ export const updateProfile = async (req, res) => {
     const updatedUser = await User.findByIdAndUpdate(
       req.user._id,
       { name, phone },
-      { new: true }
+      { new: true },
     ).select("-password");
+
+    // Invalidate cache
+    await deleteCache(`user:${req.user._id}`);
+    console.log(`🗑️ Cache invalidated for profile update`);
 
     return res.status(200).json({
       message: "Profile updated successfully",
@@ -234,8 +252,12 @@ export const updateProfileImage = async (req, res) => {
     const updatedUser = await User.findByIdAndUpdate(
       req.user._id,
       { profileImage: uploaded.secure_url },
-      { new: true }
+      { new: true },
     ).select("-password");
+
+    // Invalidate cache
+    await deleteCache(`user:${req.user._id}`);
+    console.log(`🗑️ Cache invalidated for profile image update`);
 
     return res.status(200).json({
       message: "Profile image updated successfully",
@@ -246,7 +268,6 @@ export const updateProfileImage = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
-
 
 export const forceChangePassword = async (req, res) => {
   try {
@@ -279,16 +300,31 @@ export const forceChangePassword = async (req, res) => {
   }
 };
 
-
 // Only Admins controllers
 
 export const getAllResidents = async (req, res) => {
   try {
+    const cacheKey = `residents:${req.params.societyId}`;
+
+    // Check cache
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log(`✅ Cache hit for getAllResidents`);
+      return res.status(200).json({
+        message: "All residents fetched",
+        residents: cached,
+      });
+    }
+
     const residents = await User.find({
       role: "resident",
       societyId: req.params.societyId,
       isVerified: "true",
     }).select("-password");
+
+    // Store in cache (60 min TTL)
+    await setCache(cacheKey, residents, 3600);
+    console.log(`💾 Residents data cached`);
 
     return res.status(200).json({
       message: "All residents fetched",
@@ -323,7 +359,7 @@ export const approveResident = async (req, res) => {
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { isVerified: true },
-      { new: true }
+      { new: true },
     ).select("-password");
 
     if (!updatedUser)
@@ -337,47 +373,6 @@ export const approveResident = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
-
-export const assignFlat = async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { flatId } = req.body;
-
-    const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    const flat = await Flat.findById(flatId);
-    if (!flat) return res.status(404).json({ message: "Flat not found" });
-
-    if (String(user.societyId) !== String(flat.societyId)) {
-      return res.status(400).json({
-        message: "User and Flat do not belong to the same society",
-      });
-    }
-
-    if (flat.residentIds.length > 0) {
-      return res.status(400).json({
-        message: "Flat is already assigned to another resident",
-      });
-    }
-
-    user.flatId = flatId;
-    user.isVerified = true;
-    await user.save();
-
-    flat.residentIds.push(user._id);
-    await flat.save();
-
-    return res.status(200).json({
-      message: "Flat assigned successfully",
-      user,
-      flat,
-    });
-  } catch (err) {
-    return res.status(500).json({ message: err.message });
-  }
-};
-
 
 export const createUserWithRole = async (req, res) => {
   try {
@@ -453,8 +448,6 @@ export const createUserWithRole = async (req, res) => {
   }
 };
 
-
-
 export const changeUserRole = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -524,8 +517,6 @@ export const changeUserRole = async (req, res) => {
   }
 };
 
-
-
 export const deleteUser = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -535,7 +526,6 @@ export const deleteUser = async (req, res) => {
     if (!user) return res.status(404).json({ message: "User not found" });
 
     const requesterRole = req.user.role;
-
 
     //No one can delete developer
     if (user.role === "developer") {
@@ -569,7 +559,6 @@ export const deleteUser = async (req, res) => {
       });
     }
 
-    
     if (user.role === "staff") {
       await Staff.findOneAndDelete({ userId });
     }
@@ -584,11 +573,9 @@ export const deleteUser = async (req, res) => {
   }
 };
 
-
 export const getUserById = async (req, res) => {
   try {
     const user = await User.findById(req.params.userId).select("-password");
-
 
     if (!user) return res.status(404).json({ message: "User not found" });
 
